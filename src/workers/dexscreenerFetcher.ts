@@ -3,16 +3,16 @@ export {};
 import { http, limit } from "../lib/httpClient";
 import { publishRaw } from "./fetcherBase";
 
-// A simple normalizer to convert DexScreener data → TokenDto structure
 function normalizeDex(entry: any) {
   return {
     token_address: entry?.baseToken?.address || entry?.tokenAddress,
     token_name: entry?.baseToken?.name,
     token_ticker: entry?.baseToken?.symbol,
 
-    price_sol: Number(entry?.priceUsd) || undefined,
-    volume_sol: Number(entry?.volume?.h24) || undefined,
-    liquidity_sol: Number(entry?.liquidity?.usd) || undefined,
+    // Convert USD → generic price (you can later convert to SOL if needed)
+    price: Number(entry?.priceUsd) || undefined,
+    volume: Number(entry?.volume?.h24) || undefined,
+    liquidity: Number(entry?.liquidity?.usd) || undefined,
 
     source: "dexscreener",
     fetched_at: Date.now(),

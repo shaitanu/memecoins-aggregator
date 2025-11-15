@@ -62,11 +62,30 @@ async function writeTokenToRedis(address: string, token: any) {
   const key = `token:${address}`;
   const payload: Record<string, string> = {};
 
+  // Save everything as JSON strings
   for (const [k, v] of Object.entries(token)) {
     payload[k] = JSON.stringify(v);
   }
 
+  // Write hash to Redis
   await redis.hset(key, payload);
+
+  // Update sorted sets for API sorting
+  if (token.volume !== undefined) {
+    await redis.zadd("index:volume", token.volume, address);
+  }
+
+  if (token.liquidity !== undefined) {
+    await redis.zadd("index:liquidity", token.liquidity, address);
+  }
+
+  if (token.market_cap !== undefined) {
+    await redis.zadd("index:market_cap", token.market_cap, address);
+  }
+
+  if (token.price_24h_change !== undefined) {
+    await redis.zadd("index:price_change_24h", token.price_24h_change, address);
+  }
 }
 
 //
@@ -93,15 +112,15 @@ function mergeTokens(
 
   // Merge numeric fields only if incoming is valid
   const numericFields = [
-    "price_sol",
-    "market_cap_sol",
-    "volume_sol",
-    "liquidity_sol",
-    "transaction_count",
-    "price_1h_change",
-    "price_24h_change",
-    "price_7d_change",
-  ];
+  "price",
+  "market_cap",
+  "volume",
+  "liquidity",
+  "transaction_count",
+  "price_1h_change",
+  "price_24h_change",
+  "price_7d_change",
+];
 
   for (const field of numericFields) {
     if (incoming[field] !== undefined && incoming[field] !== null) {
