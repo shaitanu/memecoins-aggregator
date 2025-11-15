@@ -1,7 +1,10 @@
 import { createApiServer } from "./server/api";
 
-const app = createApiServer();
+async function start() {
+  const app = await createApiServer();
 
-app.listen({ port: 3000 }).then(() => {
+  await app.listen({ port: 3000 });
   console.log("API server running at http://localhost:3000");
-});
+}
+
+start();

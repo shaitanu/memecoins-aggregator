@@ -2,7 +2,43 @@ import { sub, pub, redis } from "../lib/redis";
 
 console.log("Aggregator started...");
 
-// Subscribe to raw token updates
+// -----------------------------------------------------------------------------
+// 1. BATCH BUFFER (fix duplicate writes)
+// -----------------------------------------------------------------------------
+
+// Stores merged tokens by address within the current 200ms window
+const updateBuffer: Record<string, any> = {};
+
+// true → flush already scheduled
+let flushScheduled = false;
+
+// Flush buffer to Redis + WebSocket
+function scheduleFlush() {
+  if (flushScheduled) return;
+  flushScheduled = true;
+
+  setTimeout(async () => {
+    flushScheduled = false;
+
+    const entries = Object.entries(updateBuffer);
+
+    for (const [address, mergedToken] of entries) {
+      delete updateBuffer[address];
+
+      await writeTokenToRedis(address, mergedToken);
+
+      await pub.publish(
+        "state_changes",
+        JSON.stringify({ address, diff: mergedToken })
+      );
+    }
+  }, 200); // 200ms batching window
+}
+
+// -----------------------------------------------------------------------------
+// 2. LISTEN FOR RAW UPDATES
+// -----------------------------------------------------------------------------
+
 sub.subscribe("raw_tokens");
 
 sub.on("message", async (_channel, message) => {
@@ -14,34 +50,35 @@ sub.on("message", async (_channel, message) => {
       const addr = t.token_address;
       if (!addr) continue;
 
-      // 1. Load current data
+      // Load existing from Redis
       const existing = await readTokenFromRedis(addr);
 
-      // 2. Merge incoming + existing
+      // Merge the new data
       const merged = mergeTokens(existing, t, source, fetched_at);
 
-      // 3. Compute diff
+      // Compute diff vs existing
       const diff = diffObjects(existing, merged);
 
-      // 4. Filter out useless changes (timestamps/noise)
+      // Only keep meaningful changes
       const filteredDiff = filterMeaningfulDiff(diff);
+      if (Object.keys(filteredDiff).length === 0) continue;
 
-      // If meaningful changes → write + publish
-      if (Object.keys(filteredDiff).length > 0) {
-        await writeTokenToRedis(addr, merged);
-        await pub.publish("state_changes", JSON.stringify({ address: addr, diff: filteredDiff }));
-        prettyPrintDiff(addr, filteredDiff, existing);
-      }
+      // Add to batching buffer
+      updateBuffer[addr] = merged;
+      scheduleFlush();
+
+      // Pretty-print diff for logs
+      prettyPrintDiff(addr, filteredDiff, existing);
     }
   } catch (err) {
     console.error("Aggregator error:", err);
   }
 });
 
+// -----------------------------------------------------------------------------
+// 3. FILTER OUT USELESS CHANGES
+// -----------------------------------------------------------------------------
 
-//
-// HELPER: Filter meaningful diffs
-//
 function filterMeaningfulDiff(diff: any) {
   const ignore = ["_updated_at", "fetched_at", "last_source", "token_address"];
 
@@ -49,60 +86,48 @@ function filterMeaningfulDiff(diff: any) {
 
   for (const [key, val] of Object.entries(diff)) {
     if (ignore.includes(key)) continue;
-
-    // Skip null/undefined changes
     if (val === null || val === undefined) continue;
-
     meaningful[key] = val;
   }
 
   return meaningful;
 }
 
+// -----------------------------------------------------------------------------
+// 4. LOG PRETTY DIFFS
+// -----------------------------------------------------------------------------
 
-//
-// HELPER: Pretty-print readable diff
-//
 function prettyPrintDiff(address: string, diff: any, oldData: any | null) {
   console.log(`\n📌 Token Update → ${address}`);
 
-  const entries = Object.entries(diff);
-
-  for (const [field, newValue] of entries) {
+  for (const [field, newValue] of Object.entries(diff)) {
     const oldValue = oldData ? oldData[field] : undefined;
 
     const newNum = Number(newValue);
     const oldNum = Number(oldValue);
 
-  
-    // ------------------------
-    // VOLUME THRESHOLD
-    // ------------------------
+    // Volume small noise threshold
     if (field === "volume" && !isNaN(newNum) && !isNaN(oldNum)) {
-      if (Math.abs(newNum - oldNum) < 20) continue; // skip small volume changes
+      if (Math.abs(newNum - oldNum) < 20) continue;
     }
 
-    // ------------------------
-    // LIQUIDITY THRESHOLD
-    // ------------------------
+    // Liquidity noise threshold
     if (field === "liquidity" && !isNaN(newNum) && !isNaN(oldNum)) {
-      if (Math.abs(newNum - oldNum) < 1) continue; // skip tiny liq changes
+      if (Math.abs(newNum - oldNum) < 1) continue;
     }
 
-    // Print readable change
     console.log(
-      `  ${field.padEnd(18)} ${String(oldValue).padEnd(10)} → ${newValue}`
+      `  ${field.padEnd(18)} ${String(oldValue).padEnd(12)} → ${newValue}`
     );
   }
 
   console.log("");
 }
 
+// -----------------------------------------------------------------------------
+// 5. REDIS — READ & WRITE
+// -----------------------------------------------------------------------------
 
-
-//
-// 1. Read existing token
-//
 async function readTokenFromRedis(address: string): Promise<any | null> {
   const key = `token:${address}`;
   const data = await redis.hgetall(key);
@@ -120,11 +145,6 @@ async function readTokenFromRedis(address: string): Promise<any | null> {
   return parsed;
 }
 
-
-
-//
-// 2. Write merged token into Redis + sorted sets
-//
 async function writeTokenToRedis(address: string, token: any) {
   const key = `token:${address}`;
   const payload: Record<string, string> = {};
@@ -135,28 +155,23 @@ async function writeTokenToRedis(address: string, token: any) {
 
   await redis.hset(key, payload);
 
-  if (token.volume !== undefined) {
+  if (token.volume !== undefined)
     await redis.zadd("index:volume", token.volume, address);
-  }
 
-  if (token.liquidity !== undefined) {
+  if (token.liquidity !== undefined)
     await redis.zadd("index:liquidity", token.liquidity, address);
-  }
 
-  if (token.market_cap !== undefined) {
+  if (token.market_cap !== undefined)
     await redis.zadd("index:market_cap", token.market_cap, address);
-  }
 
-  if (token.price_24h_change !== undefined) {
+  if (token.price_24h_change !== undefined)
     await redis.zadd("index:price_change_24h", token.price_24h_change, address);
-  }
 }
 
+// -----------------------------------------------------------------------------
+// 6. MERGE TOKENS FROM MULTIPLE SOURCES
+// -----------------------------------------------------------------------------
 
-
-//
-// 3. Merge tokens
-//
 function mergeTokens(
   existing: any | null,
   incoming: any,
@@ -167,12 +182,11 @@ function mergeTokens(
 
   result.token_address = incoming.token_address;
 
-  if (!result.token_name && incoming.token_name) {
+  if (!result.token_name && incoming.token_name)
     result.token_name = incoming.token_name;
-  }
-  if (!result.token_ticker && incoming.token_ticker) {
+
+  if (!result.token_ticker && incoming.token_ticker)
     result.token_ticker = incoming.token_ticker;
-  }
 
   const numericFields = [
     "price",
@@ -198,11 +212,10 @@ function mergeTokens(
   return result;
 }
 
+// -----------------------------------------------------------------------------
+// 7. CALCULATE DIFF
+// -----------------------------------------------------------------------------
 
-
-//
-// 4. Compute diff
-//
 function diffObjects(oldObj: any | null, newObj: any) {
   const diff: Record<string, any> = {};
 
@@ -214,6 +227,5 @@ function diffObjects(oldObj: any | null, newObj: any) {
       diff[key] = newValue;
     }
   }
-
   return diff;
 }
