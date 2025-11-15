@@ -3,6 +3,7 @@ import fastifyCors from "@fastify/cors";
 
 import { discoverRoute } from "./routes/discover";
 import { health } from "./routes/health";
+import { ingestRoute } from "./routes/ingest";
 
 export async function createApiServer() {
   const app = Fastify({
@@ -21,6 +22,7 @@ export async function createApiServer() {
   // ------------------------------
   app.register(discoverRoute);
   app.register(health);
+  app.register(ingestRoute)
 
   return app;
 }

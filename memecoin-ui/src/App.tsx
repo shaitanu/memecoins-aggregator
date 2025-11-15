@@ -8,7 +8,7 @@ type Token = {
   volume?: number;
   liquidity?: number;
   market_cap?: number;
-  price_24h_change?: number;
+  price_change_24h?: number;
 };
 
 export default function App() {
@@ -21,35 +21,81 @@ export default function App() {
   const [filterOp, setFilterOp] = useState(">=");
   const [filterValue, setFilterValue] = useState("");
 
-  // Load initial data
-  useEffect(() => {
-    fetch("http://localhost:3000/discover?limit=100&sort=volume")
-      .then((res) => res.json())
-      .then((data) => {
-        const map: Record<string, Token> = {};
-        data.tokens.forEach((t: Token) => (map[t.token_address] = t));
-        setTokens(map);
+// Load initial data WITH LATENCY MEASUREMENT
+useEffect(() => {
+  const load = async () => {
+    const url = "http://localhost:3000/discover?limit=100&sort=volume";
+
+    const start = performance.now();
+    const res = await fetch(url);
+    const json = await res.json();
+    const end = performance.now();
+
+    console.log(
+      `%c⏱️ API /discover → ${(end - start).toFixed(2)} ms`,
+      "color:#4ade80;font-weight:bold"
+    );
+
+    const map: Record<string, Token> = {};
+    json.tokens.forEach((t: Token) => (map[t.token_address] = t));
+    setTokens(map);
+  };
+
+  load();
+}, []);
+
+
+// WebSocket updates WITH END-TO-END LATENCY
+useEffect(() => {
+  const ws = new WebSocket("ws://localhost:4000");
+
+  ws.onopen = () => {
+    console.log("%c🔌 WS Connected", "color:#60a5fa;font-weight:bold");
+  };
+
+  ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+
+      // Skip welcome messages
+      if (!msg.address) {
+        console.log("%c💬 WS Message:", "color:#60a5fa", msg);
+        return;
+      }
+
+      const now = Date.now();
+      const diff = msg.diff;
+
+      // End-to-end latency if `_updated_at` exists
+      if (diff?._updated_at) {
+        console.log(
+          `%c⚡ WS Update for ${msg.address} → ${now - diff._updated_at} ms`,
+          "color:#fbbf24;font-weight:bold"
+        );
+      }
+
+      setTokens((prev) => {
+        const updated = { ...prev };
+
+        if (!updated[msg.address]) return prev;
+
+        updated[msg.address] = {
+          ...updated[msg.address],
+          ...diff,
+        };
+        return updated;
       });
-  }, []);
+    } catch (e) {
+      console.warn("WS JSON parse error", e);
+    }
+  };
 
-  // WebSocket updates
-  useEffect(() => {
-    const ws = new WebSocket("ws://localhost:4000");
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        const { address, diff } = msg;
+  ws.onclose = () => {
+    console.log("%c🔌 WS Disconnected", "color:#f87171;font-weight:bold");
+  };
 
-        setTokens((prev) => {
-          const updated = { ...prev };
-          if (!updated[address]) return prev;
-          updated[address] = { ...updated[address], ...diff };
-          return updated;
-        });
-      } catch {}
-    };
-    return () => ws.close();
-  }, []);
+  return () => ws.close();
+}, []);
 
   // Filtering & sorting combined
   const filteredTokens = useMemo(() => {
@@ -115,7 +161,7 @@ export default function App() {
           <option value="price">Price</option>
           <option value="liquidity">Liquidity</option>
           <option value="market_cap">Market Cap</option>
-          <option value="price_24h_change">24h % Change</option>
+          <option value="price_change_24h">24h % Change</option>
         </select>
 
         {/* FILTER FIELD */}
@@ -182,12 +228,12 @@ export default function App() {
 
                 <td
                   className={`p-3 text-right ${
-                    (t.price_24h_change ?? 0) >= 0
+                    (t.price_change_24h ?? 0) >= 0
                       ? "text-green-400"
                       : "text-red-400"
                   }`}
                 >
-                  {t.price_24h_change?.toFixed(2)}%
+                  {t.price_change_24h?.toFixed(2)}%
                 </td>
 
                 <td className="p-3 text-right">

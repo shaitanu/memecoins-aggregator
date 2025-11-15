@@ -1,43 +1,85 @@
 import { http, limit } from "../lib/httpClient";
-import { publishRaw } from "./fetcherBase";
+import { ingestApi } from "../lib/internalApi";
 
-function normalizeJup(address: string, j: any) {
+function normalizeJup(addrRaw: string, j: any) {
+  // normalize address (lowercase & trimmed)
+  const token_address = addrRaw?.toString()?.trim();
+
+  if (!token_address) return null;
+
+  const price = j?.usdPrice;
+  const price_change_24h = j?.priceChange24h;
+
   return {
-    token_address: address,
-    price: j.usdPrice,
-    price_24h_change: j.priceChange24h,
-    source: "jupiter",
+    token_address,
+    price: price !== undefined ? Number(price) : undefined,
+    price_change_24h: price_change_24h !== undefined ? Number(price_change_24h) : undefined,
+    source: "jup",
     fetched_at: Date.now(),
   };
 }
 
 export async function fetchJupiter(addresses: string[]) {
   try {
-    if (addresses.length === 0) return;
+    if (!addresses || addresses.length === 0) return;
 
-    // Jupiter supports up to ~100 IDs comfortably
-    const chunks = [];
+    // Jupiter safe chunk size: 50
+    const chunks: string[][] = [];
     for (let i = 0; i < addresses.length; i += 50) {
       chunks.push(addresses.slice(i, i + 50));
     }
 
-    const allTokens: any[] = [];
+    const chunkRequests = chunks.map((chunk) =>
+      limit(() =>
+        http
+          .get(`https://lite-api.jup.ag/price/v3?ids=${chunk.join(",")}`)
+          .then((res) => res.data)
+          .catch((err) => {
+            console.warn("Jupiter chunk failed:", err?.message || err);
+            return null;
+          })
+      )
+    );
 
-    for (const chunk of chunks) {
-      const url = `https://lite-api.jup.ag/price/v3?ids=${chunk.join(",")}`;
+    const settled = await Promise.allSettled(chunkRequests);
 
-      const res = await limit(() => http.get(url));
-      const data = res.data || {};
+    const tokens: any[] = [];
 
+    for (const s of settled) {
+      if (s.status !== "fulfilled" || !s.value) continue;
+
+      const data = s.value;
       for (const [tokenAddress, info] of Object.entries<any>(data)) {
-        allTokens.push(normalizeJup(tokenAddress, info));
+        const n = normalizeJup(tokenAddress, info);
+        if (n) tokens.push(n);
       }
     }
 
-    await publishRaw("jupiter", allTokens);
+    if (tokens.length === 0) {
+      console.log("Jupiter: no tokens normalized");
+      return;
+    }
 
-    console.log(`Jupiter: Published ${allTokens.length} price updates`);
+    // Deduplicate by address (keep newest fetched_at)
+    const latestByAddress = new Map<string, any>();
+    for (const t of tokens) {
+      const addr = t.token_address;
+      const existing = latestByAddress.get(addr);
 
+      if (!existing || t.fetched_at > existing.fetched_at) {
+        latestByAddress.set(addr, t);
+      }
+    }
+
+    const deduped = Array.from(latestByAddress.values());
+
+    // Send final deduped batch to /ingest
+    await ingestApi.post("/ingest", {
+      source: "jup",
+      tokens: deduped,
+    });
+
+    console.log(`Jupiter → sent ${deduped.length} tokens to /ingest`);
   } catch (err) {
     console.error("Jupiter fetch error:", err);
   }
