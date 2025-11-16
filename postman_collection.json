@@ -1,0 +1,61 @@
+{
+  "info": {
+    "_postman_id": "e709b2c2-a0cc-4ad0-9cb0-eterna-api",
+    "name": "Eterna API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/health",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "Discover Tokens",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3000/discover?sort=volume&limit=10",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["discover"],
+          "query": [
+            { "key": "sort", "value": "volume" },
+            { "key": "limit", "value": "10" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Ingest Tokens",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"source\": \"dex\",\n  \"tokens\": [\n    {\n      \"token_address\": \"AAA\",\n      \"price\": 10,\n      \"volume\": 20\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "http://localhost:3000/ingest",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["ingest"]
+        }
+      }
+    }
+  ]
+}
