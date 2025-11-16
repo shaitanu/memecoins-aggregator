@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------------
-// 7. MERGE TOKENS (existing DB snapshot + incoming merged object)
+//  MERGE TOKENS (existing DB snapshot + incoming merged object)
 // -----------------------------------------------------------------------------
 
 export function mergeTokens(existing: any | null, incoming: any, source: string, fetched_at: number) {
@@ -45,7 +45,7 @@ export function mergeTokens(existing: any | null, incoming: any, source: string,
 }
 
 // -----------------------------------------------------------------------------
-// 8. DIFF FUNCTION
+//  DIFF FUNCTION
 // -----------------------------------------------------------------------------
 
 
@@ -67,7 +67,7 @@ export function diffObjects(oldObj: any | null, newObj: any) {
   return diff;
 }
 // -----------------------------------------------------------------------------
-// 4. FILTER OUT USELESS CHANGES
+//  FILTER OUT USELESS CHANGES
 // -----------------------------------------------------------------------------
 
 export function filterMeaningfulDiff(diff: any) {

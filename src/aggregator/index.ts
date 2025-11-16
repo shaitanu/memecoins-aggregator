@@ -3,7 +3,7 @@ import { mergeTokens, diffObjects, filterMeaningfulDiff } from "./logic";
 console.log("Aggregator started...");
 
 // -----------------------------------------------------------------------------
-// 1. BATCH BUFFER (collect merged entries from /ingest)
+//  BATCH BUFFER (collect merged entries from /ingest)
 // -----------------------------------------------------------------------------
 
 // buffer stores incoming merged tokens (from /ingest) grouped by address
@@ -49,7 +49,7 @@ function mergeBuffered(a: any | null, b: any) {
 }
 
 // -----------------------------------------------------------------------------
-// 2. FLUSH BUFFER TO REDIS + PUBSUB
+//  FLUSH BUFFER TO REDIS + PUBSUB
 // -----------------------------------------------------------------------------
 
 function scheduleFlush() {
@@ -99,7 +99,7 @@ function scheduleFlush() {
 }
 
 // -----------------------------------------------------------------------------
-// 3. LISTEN FOR RAW BATCHES (from /ingest which publishes raw_tokens)
+//  LISTEN FOR RAW BATCHES (from /ingest which publishes raw_tokens)
 // -----------------------------------------------------------------------------
 
 sub.subscribe("raw_tokens");
@@ -126,7 +126,7 @@ sub.on("message", async (_channel: string, message: string) => {
 });
 
 // -----------------------------------------------------------------------------
-// 5. LOG PRETTY DIFFS
+//  LOG PRETTY DIFFS
 // -----------------------------------------------------------------------------
 
 function prettyPrintDiff(address: string, diff: any, oldData: any | null) {
@@ -155,7 +155,7 @@ function prettyPrintDiff(address: string, diff: any, oldData: any | null) {
 }
 
 // -----------------------------------------------------------------------------
-// 6. REDIS — READ & WRITE
+//  REDIS — READ & WRITE
 // -----------------------------------------------------------------------------
 
 async function readTokenFromRedis(address: string): Promise<any | null> {
@@ -191,4 +191,42 @@ async function writeTokenToRedis(address: string, token: any) {
   if (token.price_change_24h !== undefined)
     await redis.zadd("index:price_change_24h", token.price_change_24h, address);
 
+}
+
+export function createAggregator() {
+  console.log("Aggregator initialized");
+
+  // Remove ALL old listeners (fixes duplicate processing during tests)
+  sub.removeAllListeners("message");
+
+  const handler = async (_channel: string, message: string) => {
+    try {
+      const payload = JSON.parse(message);
+      const tokens: any[] = payload?.tokens || [];
+
+      for (const t of tokens) {
+        const addr = t?.token_address;
+        if (!addr) continue;
+
+        // merge into in-memory buffer (batch)
+        updateBuffer[addr] = mergeBuffered(updateBuffer[addr] || null, t);
+      }
+
+      scheduleFlush();
+    } catch (err) {
+      console.error("Aggregator parse error:", err);
+    }
+  };
+
+  // Single controlled subscription
+  sub.subscribe("raw_tokens");
+  sub.on("message", handler);
+
+  return {
+    stop() {
+      try {
+        sub.off("message", handler);
+      } catch {}
+    }
+  };
 }
